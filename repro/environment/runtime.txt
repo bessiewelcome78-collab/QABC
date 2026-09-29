@@ -1,0 +1,13 @@
+date=2026-09-29T16:46:42+08:00
+source_project=/home/tsz-25/MedCLIPSeg_JBTLite_QABR_V12_20260911
+destination_project=/home/tsz-25/QABC_PAPER_REPRO_FINAL_20260929
+python=/home/tsz-25/miniconda3/envs/py3.10torch2.9.1cu128/bin/python
+data_dir=/home/tsz-25/MedCLIPSeg-main/data
+seed=42
+Python 3.10.20
+platform=Linux-6.17.0-23-generic-x86_64-with-glibc2.39
+torch=2.9.1+cu128
+cuda_runtime=12.8
+cudnn=91002
+cuda_available=True
+gpu=NVIDIA A40

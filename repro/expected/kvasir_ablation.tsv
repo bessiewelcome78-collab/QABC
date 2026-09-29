@@ -1,0 +1,9 @@
+variant	dsc	true2d_nsd
+BASE	89.17	59.81
+no_local_constraint	89.37	61.79
+no_uncertainty_evidence	89.32	61.45
+no_directional_geometry	89.03	60.43
+no_semantic_detail	89.61	61.49
+no_mass_tangent	89.19	61.93
+no_zero_forward	89.75	62.69
+FULL	90.39	64.95

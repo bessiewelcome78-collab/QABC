@@ -1,0 +1,3 @@
+variant	extra_params	extra_gflops_per_mc	mc30_ms	peak_mem_mib
+HOST	0	0	1262.80	887.44
+HOST_QABC	8882	0.491	1508.32	889.19

@@ -1,0 +1,43 @@
+# QABC / QABR two-innovation ablation matrix.
+# IMPORTANT: FULL and BASE are intentionally excluded from this study.
+protocol:
+  seed: 42
+  epochs: 100
+  val_mc: 10
+  test_mc: 30
+  metrics: [DSC, true2d_NSD, paper_legacy_NSD]
+  selection: best_validation_checkpoint
+
+datasets:
+  BUSI:
+    config: configs/jbtlite/qabr_two_innovation_ablation/JBTL15_BUSI_QABR_TWO_INNOV_PAPER100.yaml
+  Kvasir:
+    config: configs/jbtlite/qabr_two_innovation_ablation/JBTL15_Kvasir_QABR_TWO_INNOV_PAPER100.yaml
+
+innovation_1_query_anchored_correction_evidence:
+  no_uncertainty_evidence:
+    question: "Does ambiguity u help identify where the established contour should be edited?"
+    switch: "QABR_ABL_NO_UNCERTAINTY_EVIDENCE=1"
+    removes: "u from the evidence tensor and edit-strength gate; hard band B is retained."
+  no_directional_geometry:
+    question: "Do normal-referenced image cues determine the correction direction?"
+    switch: "QABR_ABL_NO_DIRECTIONAL_GEOMETRY=1"
+    removes: "image-edge magnitude e_I and signed normal cue s_n from both head input and support gate."
+  no_semantic_detail:
+    question: "Does query-conditioned local semantic detail prevent unrelated edge correction?"
+    switch: "QABR_ABL_NO_SEMANTIC_DETAIL=1"
+    removes: "decoder detail F_q and explicit p/h3/h5 query-anchor channels."
+
+innovation_2_drift_constrained_boundary_correction:
+  no_local_constraint:
+    question: "Does restricting correction to the established contour neighborhood prevent remote/global edits?"
+    switch: "QABR_ABL_GLOBAL_SUPPORT=1"
+    removes: "hard local support B from the correction operator."
+  no_mass_tangent:
+    question: "Does the first-order mass-tangent projection suppress global expansion/contraction drift?"
+    switch: "QABR_V15_TANGENT_PROJECTION=0"
+    removes: "probability-mass tangent projection only."
+  no_zero_forward:
+    question: "Does zero-forward shadow learning protect the semantic anchor during optimization?"
+    switch: "QABR_ABL_NO_ZERO_FORWARD=1"
+    removes: "shadow-only training; finite correction becomes directly visible during training."
