@@ -1,75 +1,116 @@
-# QABC: Query-Anchored Boundary Correction for Vision-Language Medical Image Segmentation
+# QABC: Query-Anchored Boundary Correction for Vision–Language Medical Image Segmentation
 
-Official implementation of **QABC (Query-Anchored Boundary Correction)**, a lightweight boundary refinement framework for text-conditioned medical image segmentation.
+Official implementation of **QABC (Query-Anchored Boundary Correction)**, a lightweight contour refinement framework for vision–language medical image segmentation.
 
-QABC treats the prediction of a pretrained vision-language segmenter as a **semantic anchor** and performs only constrained local correction around the predicted decision contour. Instead of re-predicting the entire mask, QABC focuses on boundary geometry while preserving the semantic localization ability of the base model.
+QABC is designed to improve boundary geometry while preserving the semantic localization of an existing text-conditioned segmenter. Instead of re-predicting the complete segmentation mask, QABC treats the base prediction as a semantic anchor and performs only constrained local correction around its decision contour.
 
 ---
 
 ## Overview
 
-Vision-language medical segmentation models can provide reliable semantic localization from text queries, but their predicted masks may still contain local boundary misalignment.
+Vision–language medical segmentation models can provide strong semantic localization from text queries. However, semantically correct predictions may still exhibit local contour misalignment, especially around ambiguous or low-contrast boundaries.
 
-QABC addresses this problem through three key designs:
+Directly re-predicting the entire mask can unnecessarily disturb regions that are already correctly localized. QABC therefore reformulates refinement as a **query-anchored local boundary correction problem**.
 
-1. **Query-Anchored Correction Evidence**  
-   Local boundary support, uncertainty, image-edge evidence, signed contour-normal information, local logit contrast, and query-conditioned decoder features are combined to estimate boundary correction.
+<p align="center">
+  <img src="assets/QABC_Motivation.png" width="90%">
+</p>
 
-2. **Constrained Boundary Correction**  
-   The predicted correction is spatially restricted to the contour neighborhood and bounded to prevent unstable global mask deformation. A mass-tangent projection further suppresses unintended foreground expansion or contraction.
+<p align="center">
+  <em>Motivation of QABC. Rather than replacing the base segmentation, QABC preserves its semantic prediction and only corrects local contour errors.</em>
+</p>
 
-3. **Zero-Forward Shadow-Residual Learning**  
-   During training, the correction branch receives gradients without perturbing the forward prediction of the semantic anchor. At inference time, the learned residual is applied to refine the boundary.
-
-The QABC correction head introduces only **8,882 trainable parameters**.
+> **Abstract:**  
+> Vision–language medical segmentation can localize targets through text queries, yet reliable semantic localization does not necessarily guarantee precise boundary geometry. We propose **QABC**, a lightweight query-anchored boundary correction framework that preserves the base prediction as a semantic anchor and learns constrained local corrections around its decision contour. QABC integrates probability ambiguity, image-edge evidence, signed contour-normal geometry, local logit contrast, and query-conditioned decoder features to estimate bounded corrections. A mass-tangent projection suppresses unintended global foreground expansion or contraction, while zero-forward shadow-residual learning enables the correction branch to be optimized without perturbing the base forward prediction during training. QABC therefore improves local boundary alignment without re-predicting the complete segmentation mask and introduces only **8,882 additional trainable parameters**.
 
 ---
 
-## Framework
+## Method
 
-The base vision-language segmentation model produces an initial logit map
+<p align="center">
+  <img src="assets/QABC_Framework.png" width="100%">
+</p>
 
-\[
-z_0
-\]
+<p align="center">
+  <em>Overall architecture of QABC. The base vision–language segmentation prediction is preserved as a semantic anchor, while QABC learns constrained residual correction around the predicted decision contour.</em>
+</p>
 
-and a query-conditioned decoder representation.
+QABC consists of three main components.
 
-QABC constructs contour-local correction evidence from:
+### 1. Query-Anchored Correction Evidence
 
-- local contour band;
-- probability uncertainty;
+Given an image and a text query, the base vision–language segmenter produces an initial segmentation logit map and query-conditioned decoder features.
+
+QABC constructs local correction evidence around the current decision contour using complementary signals including:
+
+- contour-local support;
+- predictive uncertainty;
 - image-edge evidence;
 - signed contour-normal geometry;
-- query-conditioned decoder features;
-- local logit contrast.
+- local logit contrast;
+- query-conditioned decoder features.
 
-The correction head predicts a bounded residual that is constrained before being applied to the base prediction.
+These signals jointly determine **where**, **in which direction**, and **whether** the current contour should be corrected.
 
-The final inference prediction is obtained by refining the base logits rather than re-predicting the complete segmentation mask.
+### 2. Constrained Boundary Correction
+
+A lightweight correction head predicts a bounded local residual from the constructed evidence.
+
+The correction is restricted to the contour neighborhood rather than being applied globally. A mass-tangent projection further removes the common expansion/contraction component, reducing unintended global foreground-area drift.
+
+The correction head contains only **8,882 trainable parameters**.
+
+### 3. Zero-Forward Shadow-Residual Learning
+
+Directly injecting an unconverged residual during early training may damage the semantic localization already provided by the base model.
+
+QABC therefore adopts **zero-forward shadow-residual learning**. During training, the residual branch receives gradients while the forward prediction remains identical to the semantic anchor. During inference, the learned residual is activated to refine the decision contour.
+
+This separates:
+
+- **semantic localization**, provided by the base model; and
+- **boundary geometry correction**, learned by QABC.
 
 ---
 
-## Repository Structure
+## Main Characteristics
+
+QABC is designed around four principles:
+
+1. **Semantic Preservation**  
+   The existing vision–language prediction is treated as an anchor instead of being replaced.
+
+2. **Contour-Local Refinement**  
+   Corrections are concentrated around the predicted decision boundary.
+
+3. **Geometry-Aware Constraints**  
+   Directional and mass-tangent constraints suppress uncontrolled mask deformation.
+
+4. **Lightweight Adaptation**  
+   The correction branch adds only **8,882 trainable parameters**.
+
+---
+
+## Experimental Setup
+
+We evaluate QABC on four medical image segmentation benchmarks covering different imaging modalities and anatomical targets:
+
+| Dataset | Modality / Task |
+|---|---|
+| BUSI | Breast ultrasound lesion segmentation |
+| BTMRI | Brain MRI tumor segmentation |
+| ISIC | Dermoscopic skin-lesion segmentation |
+| Kvasir-SEG | Endoscopic polyp segmentation |
+
+The standard experimental setting uses:
 
 ```text
-QABC/
-├── configs/                 # Experiment configurations
-├── datasets/                # Dataset loading and preprocessing
-├── open_clip_lib/           # OpenCLIP / UniMedCLIP related utilities
-├── repro/                   # Reproducibility utilities and experiment scripts
-├── scripts/                 # Training / evaluation / analysis scripts
-├── tools/                   # Auxiliary tools
-├── trainers/                # Base segmenter and QABC implementation
-│   ├── qabr.py
-│   ├── qabr_v10_legacy.py
-│   └── medclipseg_unimedclip.py
-├── utils/                   # Evaluation, metrics, and common utilities
-│   ├── eval.py
-│   ├── main_utils.py
-│   └── metrics_2d.py
-├── train.py                 # Training entry point
-├── test.py                  # Testing entry point
-├── environment.yml          # Conda environment
-├── requirements-lock.txt    # Exact Python package snapshot
-└── README.md
+Input resolution : 224 × 224
+Random seed      : 42
+Training epochs  : 100
+Batch size       : 24
+Optimizer        : Adam
+Learning rate    : 3e-4
+LR schedule      : Cosine
+Model selection  : Best validation checkpoint
+Test inference   : MC30
