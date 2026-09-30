@@ -12,12 +12,16 @@ School of Computer Science and Technology, Xinjiang University, Ürümqi 830046,
 
 ## Overview
 
-Text-conditioned medical image segmentation can provide reliable semantic localization, but semantic correctness does not necessarily guarantee accurate boundary geometry. Local leakage, indentation, or contour displacement may remain around an otherwise correctly localized target.
+Text-conditioned medical image segmentation has advanced rapidly, yet semantic correctness does not necessarily guarantee geometric accuracy. A model may correctly identify the queried structure while still retaining local contour errors such as leakage, indentation, or boundary displacement.
 
-QABC addresses this problem by preserving the existing query-conditioned prediction as a **semantic anchor** and learning only a constrained correction around its established decision contour, rather than re-predicting the complete segmentation mask.
+Re-predicting the complete mask may repair these errors, but it also introduces unnecessary freedom and can disturb regions that are already correctly localized.
+
+QABC therefore focuses on a more constrained problem: **repairing residual boundary errors while preserving the existing semantic prediction**. The current query-conditioned prediction is treated as a semantic anchor, and QABC learns only a bounded local correction around its established decision contour.
 
 <p align="center">
-  <img src="assets/motivation.png" width="95%">
+  <a href="assets/qabr_motivation.pdf">
+    <b>View QABC Motivation Figure (PDF)</b>
+  </a>
 </p>
 
 <p align="center">
@@ -34,7 +38,7 @@ QABC addresses this problem by preserving the existing query-conditioned predict
 ## Method
 
 <p align="center">
-  <img src="assets/framework.png" width="100%">
+  <img src="assets/framework.png" width="100%" alt="QABC Framework">
 </p>
 
 <p align="center">
@@ -43,137 +47,376 @@ QABC addresses this problem by preserving the existing query-conditioned predict
   </em>
 </p>
 
-QABC preserves the query-conditioned prediction of the base segmenter as a semantic anchor and learns only a constrained local correction around its established decision contour.
+QABC preserves the query-conditioned prediction of the base segmenter as a **semantic anchor** and learns only a constrained local correction around its established decision contour.
 
-### Query-Anchored Correction Evidence
+The framework contains three main stages:
 
-Given a medical image \(I\) and text query \(q\), the base text-conditioned segmenter produces an image-resolution logit map \(z_0\) and a query-conditioned decoder feature \(F_d\), with
+1. **Query-Anchored Correction Evidence**
+2. **Constrained Boundary Correction**
+3. **Shadow-Residual Learning and Inference**
 
-\[
-p_0 = \sigma(z_0).
-\]
+---
 
-Since \(p_0=0.5\) is equivalent to \(z_0=0\), this level set defines the current decision contour.
+### 1. Query-Anchored Correction Evidence
 
-QABC constructs correction evidence from three complementary sources:
+Given a medical image $I\in\mathbb{R}^{C\times H\times W}$ and a text query $q$, the base text-conditioned segmenter produces an image-resolution logit map $z_0\in\mathbb{R}^{H\times W}$ and a query-conditioned decoder feature $F_d$, with
 
-1. **Contour-localized support.**  
-   A narrow support \(B\) restricts where correction is permitted, while
+$$
+p_0=\sigma(z_0).
+$$
 
-   \[
-   u = 4p_0(1-p_0)
-   \]
+Since $p_0=0.5$ is equivalent to $z_0=0$, this level set defines the current decision contour. QABC conditions on this prediction and estimates how the established contour should be locally relocated.
 
-   describes predictive ambiguity around the current decision boundary.
+#### Contour-Localized Support
 
-2. **Normal-referenced directional geometry.**  
-   Prediction-edge strength \(e_p\), image-edge strength \(e_I\), and the signed normal-referenced image transition \(s_n\) provide geometric evidence about the local contour and its potential correction direction.
+A narrow binary support $B$ restricts where correction is permitted, while the ambiguity cue
 
-3. **Query-conditioned local detail and logit contrast.**  
-   Query-conditioned decoder information \(F_q\) is combined with multi-scale logit contrasts \(h_3\) and \(h_5\) to retain target-specific local evidence.
+$$
+u=4p_0(1-p_0)
+$$
+
+is maximal around the current decision boundary.
+
+The binary support is derived from the thresholded host prediction:
+
+$$
+M=\mathbb{I}[p_0\geq0.5],
+$$
+
+$$
+B=
+\operatorname{Dil}_5
+\left(
+\operatorname{Dil}_3(M)-\operatorname{Ero}_3(M)
+\right).
+$$
+
+Therefore, $B$ determines **where correction is allowed**, while $u$ modulates editability inside the contour neighborhood.
+
+---
+
+#### Normal-Referenced Directional Geometry
+
+Boundary magnitude alone cannot indicate whether a useful correction should move the contour inward or outward.
+
+QABC therefore references local image transitions to the normal of the current soft prediction.
+
+The image is first converted to a locally averaged intensity representation:
+
+$$
+\bar{I}
+=
+\operatorname{AvgPool}_3
+\left(
+\frac{1}{C}
+\sum_{c=1}^{C}I_c
+\right).
+$$
+
+The contour normal is
+
+$$
+\mathbf{n}
+=
+\frac{\nabla p_0}
+{\|\nabla p_0\|_2+\epsilon}.
+$$
+
+Prediction-edge and image-edge strengths are defined as
+
+$$
+e_p=\mathcal{N}_2(\|\nabla p_0\|_2),
+$$
+
+$$
+e_I=\mathcal{N}_3(\|\nabla\bar{I}\|_2),
+$$
+
+while the signed normal-referenced image transition is
+
+$$
+s_n
+=
+\frac{
+\nabla\bar{I}^{\top}\mathbf{n}
+}{
+\|\nabla\bar{I}\|_2+\epsilon
+}.
+$$
+
+Here, $s_n\in[-1,1]$ retains the orientation of the local image transition relative to the current contour normal.
+
+Its sign is used as a learned directional cue rather than a hand-crafted expansion or contraction rule.
+
+---
+
+#### Query-Conditioned Local Detail and Local Logit Contrast
+
+Image edges may arise from structures unrelated to the queried target. QABC therefore retains query-conditioned local information from the decoder and complements it with multi-scale local logit contrast.
+
+The local query-conditioned detail is
+
+$$
+F_q
+=
+\mathcal{U}
+\left[
+\phi(F_d)
+-
+\operatorname{AvgPool}_3(\phi(F_d))
+\right],
+$$
+
+where $\phi(\cdot)$ is an eight-channel $1\times1$ Conv-GN-GELU projection and $\mathcal{U}(\cdot)$ denotes bilinear upsampling.
+
+Multi-scale local logit contrasts are
+
+$$
+h_k
+=
+\tanh
+\left(
+z_0-\operatorname{AvgPool}_k(z_0)
+\right),
+\qquad
+k\in\{3,5\}.
+$$
 
 The complete correction evidence is
 
-\[
-E =
+$$
+E
+=
 \operatorname{Concat}
-(F_q,p_0,u,e_p,e_I,s_n,h_3,h_5),
-\]
+\left(
+F_q,\,
+p_0,\,
+u,\,
+e_p,\,
+e_I,\,
+s_n,\,
+h_3,\,
+h_5
+\right).
+$$
 
-and the lightweight correction head predicts a bounded signed-logit proposal
+The resulting evidence tensor has 15 channels.
 
-\[
-\delta = 2\tanh(f_\theta(E)).
-\]
+A lightweight correction head predicts the bounded signed-logit proposal:
 
-The correction head consists of a 3×3 Conv-GN-GELU block, a depthwise 3×3 Conv-GN-GELU block, and a 1×1 output convolution.
+$$
+\delta
+=
+2\tanh
+\left(
+f_\theta(E)
+\right).
+$$
+
+The correction head consists of:
+
+- $3\times3$ Conv-GN-GELU, $15\rightarrow32$;
+- depthwise $3\times3$ Conv-GN-GELU;
+- $1\times1$ output convolution.
+
+The factor $2$ bounds the proposal to
+
+$$
+\delta\in[-2,2].
+$$
 
 ---
 
-### Constrained Boundary Correction
+### 2. Constrained Boundary Correction
 
-The proposal \(\delta\) is not directly applied to the segmentation.
+The proposal $\delta$ is not directly applied.
 
-QABC first constructs an evidence-gated local support
+QABC first restricts local editability and then removes the common residual component that would otherwise produce systematic foreground expansion or contraction.
 
-\[
-S =
-B \odot
+#### Evidence-Gated Local Correction
+
+The local editability map is
+
+$$
+S
+=
+B\odot
 \left[
-0.25 + 0.75
-\max(u,B\odot e_I)
-\right],
-\]
+0.25
++
+0.75
+\max
+\left(
+u,\,
+B\odot e_I
+\right)
+\right].
+$$
 
-and obtains
+The gated proposal is
 
-\[
-d=\alpha(S\odot\delta),
-\qquad
+$$
+d
+=
+\alpha
+\left(
+S\odot\delta
+\right),
+$$
+
+with
+
+$$
 \alpha=\tanh(\eta),
-\]
+$$
 
-where \(\eta\) is initialized to zero so that QABC starts from an identity mapping.
+where $\eta$ is a learnable scalar initialized to zero.
 
-Although the correction is contour-local, same-signed residuals may accumulate into systematic foreground expansion or contraction. QABC therefore applies a **first-order mass-tangent projection**.
+Therefore, QABC starts from an identity mapping and gradually learns the global residual scale.
 
-With
+---
 
-\[
-w_x=B_xp_{0,x}(1-p_{0,x}),
-\]
+#### Mass-Tangent Projection
 
-the weighted common component is removed:
+Although $d$ is contour-local, same-signed residual corrections may accumulate into global dilation or erosion.
 
-\[
-\mu =
-\frac{\sum_x w_x d_x}
-{\sum_x w_x+\epsilon},
-\qquad
-r_x=B_x(d_x-\mu).
-\]
+For the soft foreground mass
+
+$$
+A(z)=\sum_x\sigma(z_x),
+$$
+
+the first-order perturbation around $z_0$ depends on
+
+$$
+p_{0,x}(1-p_{0,x})r_x.
+$$
+
+QABC therefore defines
+
+$$
+w_x
+=
+B_xp_{0,x}(1-p_{0,x}),
+$$
+
+and removes the weighted common component
+
+$$
+\mu
+=
+\frac{
+\sum_xw_xd_x
+}{
+\sum_xw_x+\epsilon
+}.
+$$
+
+The final residual is
+
+$$
+r_x
+=
+B_x(d_x-\mu).
+$$
 
 This gives the first-order constraint
 
-\[
+$$
 \sum_x
 p_{0,x}(1-p_{0,x})r_x
-\approx 0,
-\]
+\approx0.
+$$
 
-which suppresses dominant foreground-mass drift while still permitting positive and negative local contour corrections.
+The projection suppresses the dominant first-order foreground-mass drift without enforcing exact binary-area conservation, allowing both positive and negative local corrections.
+
+The resulting residual induces an approximate first-order normal displacement
+
+$$
+\Delta\ell_x
+\approx
+-
+\frac{
+r_x
+}{
+\|\nabla z_{0,x}\|_2+\epsilon
+}.
+$$
+
+Therefore, the sign of $r_x$ controls the local motion direction, while its magnitude together with the local logit slope determines the displacement size.
 
 ---
 
-### Shadow-Residual Learning and Inference
+### 3. Shadow-Residual Learning and Inference
 
-Directly applying an immature residual during training may disturb an already meaningful semantic prediction.
+Directly applying an immature residual during training changes the prediction being optimized and may disturb an already meaningful semantic anchor.
 
-QABC therefore separates **learning the correction** from **applying the correction** using a zero-forward shadow residual:
+QABC therefore separates **learning the correction** from **applying the correction**.
 
-\[
-r_{\mathrm{sh}} = r-\operatorname{sg}(r),
-\]
+#### Zero-Forward Shadow-Residual Learning
 
-\[
+Using the stop-gradient operator $\operatorname{sg}(\cdot)$,
+
+$$
+r_{\mathrm{sh}}
+=
+r-\operatorname{sg}(r).
+$$
+
+The training prediction is
+
+$$
 z_{\mathrm{train}}
 =
 z_0+r_{\mathrm{sh}}
 =
 z_0.
-\]
+$$
 
-Although the forward residual is zero, its gradient with respect to \(r\) remains active, allowing the correction branch to receive segmentation gradients without changing the host forward prediction.
+Although $r_{\mathrm{sh}}$ is identically zero during the forward pass,
 
-At inference time, the learned residual is explicitly applied:
+$$
+\frac{\partial r_{\mathrm{sh}}}{\partial r}=1,
+$$
 
-\[
-z_{\mathrm{ref}}=z_0+\rho r,
-\qquad
-p_{\mathrm{ref}}=\sigma(z_{\mathrm{ref}}).
-\]
+so segmentation gradients still reach the correction branch.
 
-The final segmentation is obtained by averaging 30 stochastic forward probability maps and thresholding the mean prediction at 0.5.
+For correction parameters $\theta_c$,
+
+$$
+\nabla_{\theta_c}\mathcal{L}_{\mathrm{seg}}
+=
+\left.
+\frac{\partial\mathcal{L}_{\mathrm{seg}}}{\partial z}
+\right|_{z=z_0}
+\frac{\partial r}{\partial\theta_c}.
+$$
+
+Thus, the loss is evaluated on the unchanged host prediction while the correction branch receives the local first-order descent signal.
+
+---
+
+#### Inference
+
+At inference time, the shadow operation is removed and the learned residual is explicitly applied:
+
+$$
+z_{\mathrm{ref}}
+=
+z_0+\rho r,
+$$
+
+where $\rho\in[0,1]$ is fixed using validation performance only.
+
+The refined probability map is
+
+$$
+p_{\mathrm{ref}}
+=
+\sigma(z_{\mathrm{ref}}).
+$$
+
+The final segmentation is obtained by averaging **30 stochastic forward probability maps** and thresholding the mean prediction at $0.5$.
 
 ---
 
@@ -181,52 +424,67 @@ The final segmentation is obtained by averaging 30 stochastic forward probabilit
 
 ### Datasets
 
-QABC is evaluated on four medical image segmentation benchmarks:
+We evaluate QABC on four medical image segmentation benchmarks:
 
-- **BUSI** — breast ultrasound
-- **BTMRI** — brain MRI
-- **ISIC** — dermoscopy
-- **Kvasir-SEG** — gastrointestinal endoscopy
+- **BUSI** — breast ultrasound;
+- **BTMRI** — brain MRI;
+- **ISIC** — dermoscopy;
+- **Kvasir-SEG** — gastrointestinal endoscopy.
 
-Cross-domain evaluation is additionally conducted on:
+Cross-domain evaluation is performed without target-domain adaptation on:
 
-- BUSI → BUID
-- Kvasir-SEG → CVC-ColonDB
-- Kvasir-SEG → CVC-ClinicDB
-- Kvasir-SEG → BKAI
-- BTMRI → BRISC
+- BUSI $\rightarrow$ BUID;
+- Kvasir-SEG $\rightarrow$ CVC-ColonDB;
+- Kvasir-SEG $\rightarrow$ CVC-ClinicDB;
+- Kvasir-SEG $\rightarrow$ BKAI;
+- BTMRI $\rightarrow$ BRISC.
 
-No target-domain adaptation is used for the cross-domain experiments.
+---
+
+### Metrics
+
+We report:
+
+- **DSC** for segmentation overlap;
+- **NSD** for boundary accuracy.
+
+The protocol-matched main comparison uses the benchmark NSD protocol.
+
+The Kvasir-SEG ablation study uses the stricter per-image **true2D NSD with a 2-pixel tolerance**.
+
+These two NSD definitions are therefore not numerically interchangeable.
+
+---
 
 ### Host Model and Training Protocol
 
-The host model uses:
+The host uses:
 
-- **UniMedCLIP ViT-B/16**
-- **BiomedBERT**
+- **UniMedCLIP ViT-B/16**;
+- **BiomedBERT**.
 
 The pretrained encoders are frozen.
 
-The host training objective uses:
+The experimental protocol reported in the paper is:
 
 ```text
 Dice loss weight : 0.5
 CE loss weight   : 0.5
 CLIP loss weight : 0.1
-Epochs           : 100
+Training epochs  : 100
 Optimizer        : Adam
 Learning rate    : 3e-4
 Batch size       : 24
 LR schedule      : Cosine annealing
-GPU              : NVIDIA A40
+Hardware         : NVIDIA A40
 Test inference   : 30 stochastic passes
 ```
 
-QABC uses an eight-channel detail projection and a 32-channel correction head.
+QABC uses the eight-channel local-detail projection and the 32-channel correction head described above.
 
 ---
 
-## Main Results
+## Results
 
 ### Protocol-Matched Comparison
 
@@ -237,13 +495,11 @@ DSC and NSD are reported in percentage (%).
 | MedCLIPSeg (Host) | 85.00 | 87.63 | 88.21 | 91.85 | 92.12 | 93.16 | 89.17 | 91.33 |
 | **Host + QABC** | **85.95** | **88.58** | **88.51** | **92.27** | **92.38** | **93.41** | **90.39** | **92.54** |
 
-The NSD values in this table follow the **benchmark NSD protocol**.
-
-They are not numerically interchangeable with the stricter per-image two-pixel **true2D NSD** used in the ablation study below.
+QABC consistently improves the matched host under the protocol used in the paper.
 
 ---
 
-## Ablation Study
+### Ablation Study
 
 The matched component-removal ablation is performed on **Kvasir-SEG**.
 
@@ -258,25 +514,12 @@ The matched component-removal ablation is performed on **Kvasir-SEG**.
 | w/o Shadow Residual | 89.75 | 62.69 |
 | **Full QABC** | **90.39** | **64.95** |
 
-Full QABC improves the matched Base by **1.22 DSC** and **5.14 true2D NSD**.
+Full QABC improves the matched Base by:
 
-Among the component-removal experiments, removing directional geometry produces the largest boundary degradation, reducing true2D NSD by 4.52 points.
+- **+1.22 DSC**
+- **+5.14 true2D NSD**
 
----
-
-## Qualitative Results
-
-<p align="center">
-  <img src="assets/qualitative.png" width="92%">
-</p>
-
-<p align="center">
-  <em>
-  QABC intermediate evidence and final predictions across four imaging modalities.
-  </em>
-</p>
-
-The visualization shows the query-conditioned prediction, uncertainty, contour support, directional evidence, and final segmentation across BUSI, BTMRI, ISIC, and Kvasir-SEG.
+Removing directional geometry produces the largest boundary degradation, reducing true2D NSD by **4.52 points**.
 
 ---
 
@@ -286,19 +529,34 @@ QABC is designed as a lightweight correction module.
 
 Efficiency is measured at **224×224 resolution**, batch size 1, on one NVIDIA A40.
 
+<p align="center">
+  <a href="assets/qabr_efficiency_2metrics.pdf">
+    <b>View QABC Efficiency Figure (PDF)</b>
+  </a>
+</p>
+
 | Method | Extra Params | Extra GFLOPs / MC | MC30 Latency | Peak Memory |
 |---|---:|---:|---:|---:|
 | Host | 0 | 0 | 1262.80 ms | 887.44 MiB |
 | Host + QABC | **+8,882** | **0.491** | **1508.32 ms (+19.44%)** | **889.19 MiB (+0.20%)** |
 
-QABC therefore adds only **8,882 trainable parameters** and **0.491 GFLOPs per stochastic pass**, with a **0.20% peak-memory overhead**.
+QABC adds:
+
+- **8,882 trainable parameters**;
+- **0.491 GFLOPs per MC pass**;
+- **19.44% MC30 latency overhead**;
+- only **0.20% peak-memory overhead**.
 
 ---
 
 ## Domain Generalization
 
+Cross-domain experiments are performed without target-domain adaptation.
+
 <p align="center">
-  <img src="assets/domain_generalization.png" width="95%">
+  <a href="assets/domains.pdf">
+    <b>View Domain Generalization Figure (PDF)</b>
+  </a>
 </p>
 
 <p align="center">
@@ -326,21 +584,28 @@ The QABC results reported in the paper are:
 
 ```text
 QABC/
-├── assets/                 # Figures used in README
-├── configs/                # Experiment configurations
-├── datasets/               # Dataset loaders
-├── open_clip_lib/          # OpenCLIP-related components
-├── repro/                  # Reproducibility scripts
-├── scripts/                # Experiment scripts
-├── tools/                  # Auxiliary tools
+├── assets/
+│   ├── domains.pdf
+│   ├── framework.png
+│   ├── qabr_efficiency_2metrics.pdf
+│   └── qabr_motivation.pdf
+│
+├── configs/
+├── datasets/
+├── open_clip_lib/
+├── repro/
+├── scripts/
+├── tools/
 ├── trainers/
 │   ├── qabr.py
 │   ├── qabr_v10_legacy.py
 │   └── medclipseg_unimedclip.py
+│
 ├── utils/
 │   ├── eval.py
 │   ├── main_utils.py
 │   └── metrics_2d.py
+│
 ├── train.py
 ├── test.py
 └── README.md
@@ -348,28 +613,15 @@ QABC/
 
 ---
 
-## Installation
+## Model Checkpoints
 
-Environment configuration files will be provided with the repository.
+The host model uses **UniMedCLIP ViT-B/16** together with **BiomedBERT**.
 
-After `environment.yml` is added, the environment can be created with:
+Large pretrained model weights are not distributed directly in this Git repository.
 
-```bash
-conda env create -f environment.yml
-conda activate qabc
-```
+Prepare the required pretrained resources locally according to the corresponding experiment configuration.
 
-The exact software dependencies should follow the environment used for the reported experiments.
-
----
-
-## Pretrained Models
-
-The host uses **UniMedCLIP ViT-B/16** and **BiomedBERT**.
-
-Large pretrained weights are not distributed directly in this Git repository.
-
-Place the required pretrained models under the local checkpoint directory expected by the corresponding experiment configuration.
+A typical local structure is:
 
 ```text
 checkpoints/
@@ -377,13 +629,32 @@ checkpoints/
 └── BiomedBERT-base-uncased-abstract/
 ```
 
+The checkpoint directory should remain excluded from Git tracking.
+
+---
+
+## Installation
+
+The exact software environment used for the released experiments should be reproduced using the environment configuration distributed with this repository.
+
+After `environment.yml` is added to the repository, create the environment with:
+
+```bash
+conda env create -f environment.yml
+conda activate qabc
+```
+
+The paper reports experiments on an NVIDIA A40 GPU.
+
+Exact Python, PyTorch, CUDA, and dependency versions should follow the released environment configuration rather than being inferred from the paper.
+
 ---
 
 ## Data Preparation
 
-Dataset files are not redistributed in this repository.
+The datasets are not redistributed in this repository.
 
-Please prepare the datasets locally according to the corresponding configuration files.
+Prepare the four main datasets locally:
 
 ```text
 data/
@@ -393,25 +664,39 @@ data/
 └── Kvasir-SEG/
 ```
 
-Cross-domain datasets used in the paper include BUID, CVC-ColonDB, CVC-ClinicDB, BKAI, and BRISC.
+Cross-domain evaluation additionally uses:
+
+```text
+BUID
+CVC-ColonDB
+CVC-ClinicDB
+BKAI
+BRISC
+```
+
+Please configure the corresponding dataset paths using the experiment configuration files provided under:
+
+```text
+configs/
+```
 
 ---
 
 ## Training and Evaluation
 
-The main entry points are:
+The main training entry point is:
 
 ```bash
 python train.py
 ```
 
-and
+The main testing entry point is:
 
 ```bash
 python test.py
 ```
 
-Experiment-specific configurations and scripts are provided under:
+Experiment-specific configurations and reproducibility scripts are provided under:
 
 ```text
 configs/
@@ -419,7 +704,30 @@ repro/
 scripts/
 ```
 
-For exact reproduction, use the corresponding experiment configuration rather than manually modifying the implementation.
+For exact reproduction, use the corresponding released configuration rather than manually modifying the implementation.
+
+---
+
+## Core Implementation
+
+The primary QABC implementation is located in:
+
+```text
+trainers/qabr.py
+```
+
+The corresponding host implementation is located in:
+
+```text
+trainers/medclipseg_unimedclip.py
+```
+
+Evaluation utilities are provided in:
+
+```text
+utils/eval.py
+utils/metrics_2d.py
+```
 
 ---
 
@@ -441,6 +749,6 @@ Citation information will be updated after publication.
 
 ## Acknowledgements
 
-QABC is developed on top of a vision-language medical segmentation host using UniMedCLIP ViT-B/16 and BiomedBERT.
+QABC builds upon a medical vision-language segmentation host using **UniMedCLIP ViT-B/16** and **BiomedBERT**.
 
-We thank the authors of the related vision-language segmentation models, pretrained models, and public medical segmentation datasets used in this work.
+We thank the authors of the related vision-language segmentation methods, pretrained models, and public medical image segmentation datasets used in this study.
